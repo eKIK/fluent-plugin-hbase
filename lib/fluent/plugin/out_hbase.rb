@@ -20,6 +20,7 @@ module Fluent
     config_set_default :include_time_key, false
     config_set_default :time_key, nil
 
+    config_param :row_key_name, :string, :default => nil
     config_param :tag_column_name, :string, :default => nil
     config_param :time_column_name, :string, :default => nil
     config_param :fields_to_columns_mapping, :string
@@ -66,13 +67,14 @@ MESSAGE
     end
 
     def format(tag, time, record)
-      row_values = {}
-
-      row_values[@tag_column_name] = tag unless @tag_column_name.nil?
-      row_values[@time_column_name] = time unless @time_column_name.nil?
+      output = {
+        'row_key' => @row_key_name.nil? ? SecureRandom.uuid : record[@row_key_name],
+        'row_values' => {}
+      }
+      output['row_values'][@tag_column_name] = tag unless @tag_column_name.nil?
+      output['row_values'][@time_column_name] = time unless @time_column_name.nil?
 
       @fields_to_columns.each {|field,column|
-
         next if field.nil? or column.nil?
 
         components = field.split(".")
@@ -83,24 +85,24 @@ MESSAGE
           break if value.nil?
         end
 
-        row_values[column] = value
+        output['row_values'][column] = value
       }
 
-      row_values.to_msgpack
+      output.to_msgpack
     end
 
     def write(chunk)
-      chunk.msgpack_each {|row_values|
+      chunk.msgpack_each {|record|
         event = {}
 
-        row_values.each {|column_family_and_column, value|
+        record['row_values'].each {|column_family_and_column, value|
           column_family, column = column_family_and_column.split(":")
 
           (event[column_family.intern] ||= {}).update({column => value})
         }
 
         row = MassiveRecord::Wrapper::Row.new
-        row.id = SecureRandom.uuid
+        row.id = record['row_key']
         row.values = event
         row.table = @table
         row.save
